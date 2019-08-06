@@ -53,7 +53,7 @@ class SpliceData():
             raise Exception('Data type not recognized. rmats_data must be a str, DataFrame or list.')
         
         vprint('| Creating events...')
-        self.events = data.swifter.apply(SpliceEvent, axis=1).tolist()
+        self.events = data.swifter.progress_bar(False).apply(SpliceEvent, axis=1).tolist()
         
         vprint('| Done.')
         
@@ -66,10 +66,8 @@ class SpliceData():
         exon_in, intron_in (int) : distance to read into exon and intron respectively
         '''
         regions = []
-        pbar = tqdm(self.events, leave=False)
-        for event in pbar:
+        for event in self.events:
             regions.append(event.get_junction_regions(exon_in, intron_in))
-        pbar.close()
         
         return regions
     

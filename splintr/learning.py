@@ -4,7 +4,7 @@ Author : Clarence Mah
 This module defines the custom PyTorch neural network Module and Dataset
 for the neural network classifier structure using PyTorch for performing splice-event RBP classification. 
 '''
-import splintr
+import splintr as sp
 from splintr.splice import SpliceData
 from splintr.util import vprint
 
@@ -30,6 +30,70 @@ def _calc_conv_pad(input_size, output_size, kernel_size, stride):
     '''
     return math.ceil((output_size * stride - input_size + kernel_size - stride) / 2)
 
+def fit(parameterization):
+    net = train(parameterization)
+    return validate(net)
+    manager = sp.RunManager()
+    is_first_run = True
+    for run in sp.RunBuilder.get_runs(params):    
+        # Initialize model and dataset
+        network = sp.SplintrNet(num_classes=run.num_classes,
+                          c1_in=run.c1_in,
+                          c1_out=run.c1_out,
+                          c1_kernel_w=run.c1_kernel_w,
+                          c1_filter=run.c1_filter,
+                          c1_stride_w=run.c1_stride_w,
+                          c2_out=run.c2_out,
+                          c2_kernel_w=run.c2_kernel_w,
+                          c2_filter=run.c2_filter,
+                          c2_stride_w=run.c2_stride_w,
+                          dropout=run.dropout,
+                          fc_out=run.fc_out).cuda(device)
+
+        train_loader = DataLoader(train_dataset, batch_size=run.batch_size, sampler=train_sampler)
+        valid_loader = DataLoader(valid_dataset, batch_size=run.batch_size, sampler=valid_sampler)
+
+        optimizer = torch.optim.Adam(network.parameters(), lr=run.lr, weight_decay=run.weight_decay)
+        log_dir = '/home/ubuntu/tb/8-05-19-6class/'
+        # Display brief summary of first model
+        if is_first_run:
+            is_first_run = False
+            summary(network.cuda(), input_size=(4, 4, seq_length), device='cuda')
+    #         util.show_sample(train_dataset[np.random.randint(len(train_dataset))], class_names=label_names)
+
+        # Perform training
+        manager.begin_run(run, network, train_loader, valid_loader, log_dir)
+        network.cuda()
+        for epoch in range(30):
+
+            manager.begin_epoch()
+
+            # Train on batch
+            for batch in train_loader:
+                seqs, labels = batch
+                preds = network(seqs.cuda(device)) # pass batch
+                loss = F.cross_entropy(preds, labels.cuda(device)) # calculate loss
+                optimizer.zero_grad() # zero gradients
+                loss.backward() # calculate gradients
+                optimizer.step() # update weights
+
+                manager.track_train_loss(loss)
+                manager.track_train_num_correct(preds, labels.cuda(device))
+
+            # Check validation set
+            with torch.no_grad():
+                for data in valid_loader:
+                    seqs, labels = data
+                    preds = network(seqs.cuda(device))
+                    loss = F.cross_entropy(preds, labels.cuda(device))
+
+                    manager.track_valid_loss(loss)
+                    manager.track_valid_num_correct(preds, labels.cuda(device))
+
+            manager.end_epoch()
+        manager.end_run(train_class_names=label_names[1],
+                        valid_class_names=label_names[1])
+    manager.save('../results')
 
 class SplintrNet(nn.Module):
     '''
