@@ -1,3 +1,8 @@
+'''
+Author : Clarence Mah
+
+This module defines classes to evaluate hyperparameters cleanly.
+'''
 import os
 import time
 import json
@@ -25,7 +30,7 @@ def show_sample(sample, class_names):
     '''
     sample (sequences, label)
         sequences (torch.Tensor) : sequences should be a tensor of [4 x 4 x N] (sequence_feature x ACTG_channels x sequence_length)
-        label (torch.Tensor, int) : numerical reprensentation of class label
+        label (torch.Tensor, int) : numerical representation of class label
     '''
     sequences, label = sample
     fig, axes = plt.subplots(4,1, sharex=True, figsize=(15,3.5))

@@ -4,6 +4,12 @@ Author : Clarence Mah
 This module defines the custom PyTorch neural network Module and Dataset
 for the neural network classifier structure using PyTorch for performing splice-event RBP classification. 
 '''
+import splintr
+from splintr.splice import SpliceData
+from splintr.util import vprint
+
+import math 
+
 import numpy as np
 import pandas as pd
 
@@ -12,9 +18,17 @@ from torch.utils.data import Dataset
 from torch import nn
 from torchvision.transforms import Compose
 
-
 from pybedtools import BedTool
 from Bio.Seq import Seq
+
+from tqdm.autonotebook import tqdm
+tqdm.pandas()
+    
+def _calc_conv_pad(input_size, output_size, kernel_size, stride):
+    '''
+    Calculate appropriate padding to guarantee output size.
+    '''
+    return math.ceil((output_size * stride - input_size + kernel_size - stride) / 2)
 
 
 class SplintrNet(nn.Module):
@@ -32,13 +46,12 @@ class SplintrNet(nn.Module):
                  c2_kernel_w,
                  c2_filter,
                  c2_stride_w,
+                 dropout,
                  fc_out):
         super().__init__()
         
         # Calculate appropriate padding to guarantee c1_out
         c1_padding = _calc_conv_pad(c1_in, c1_out, c1_kernel_w, c1_stride_w)
-        
-        # TODO make sure padding is > 0, < ?
         
         self.layer1 = nn.Sequential(
             nn.Conv2d(in_channels=4,
@@ -50,7 +63,6 @@ class SplintrNet(nn.Module):
             nn.MaxPool2d(kernel_size=(1,2)))
         
         c2_padding = _calc_conv_pad(c1_out/2, c2_out, c2_kernel_w, c2_stride_w)
-        # TODO make sure padding is > 0, < ?
         
         self.layer2 = nn.Sequential(
             nn.Conv2d(in_channels=c1_filter,
@@ -60,7 +72,7 @@ class SplintrNet(nn.Module):
                       padding=(0, c2_padding)),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=(1, 2)))   
-        self.drop_out = nn.Dropout(p=0.2)
+        self.drop_out = nn.Dropout(p=dropout)
         
         fc_in = int(c2_filter*4*round(c2_out/2))
         self.fc1 = nn.Linear(in_features=fc_in, out_features=fc_out)
@@ -79,7 +91,6 @@ class SplintrNet(nn.Module):
 #         print('FC input: ', out.shape)
         out = self.drop_out(out)
         out = self.fc1(out)
-#         print('FC output: ', out.shape)
         out = self.output(out)
 #         print('Final output: ', out.shape)
         return out
@@ -87,35 +98,57 @@ class SplintrNet(nn.Module):
 
 class SpliceEventDataset(Dataset):
     
-    def __init__(self, feature_files, genome_fa, transform=None):
+    def __init__(self, feature_file, genome_fa, transform=None):
         '''
-        feature_file (string): File with sequences and class labels.
-        transform (callable, optional): Optional transform to be applied on a sample.
+        feature_file (str) : path to RMATs file
+        
+        genome_fa (str) : human genome fasta
+        
+        transform (list, optional) : Optional list of transforms to be applied on a sample.
         '''
-        self.features = []
-        for file in feature_files:
-            bed = BedTool(file)
-            
-            sequences = [line.strip().upper() for line in open(bed.getfasta(genome_fa).seqfn).readlines() if not line.startswith('>')]
-            self.features.append(sequences)
-            
-        labels = pd.read_csv(file, sep='\t', header=None).iloc[:,3]
+        vprint('Creating SpliceEventDataset object...')
+
+        # Create splice object for cleaner data representation
+        jc = SpliceData(feature_file)
+        
+        vprint('| Retrieving junction intervals...')
+        event_regions = jc.get_junction_regions(50, 350) # n x 4 for SE
+        
+        vprint('| Retrieving fasta sequences...')
+        # First convert to string for BedTools
+        bed_str = ''
+        for regions in event_regions:
+            for region in regions:
+                bed_str += ' '.join([str(s) for s in region])
+                bed_str += '\n'            
+
+        # Query and load fasta sequences to runtime memory
+        bed = BedTool(bed_str, from_string=True)
+        sequences = []
+        for line in open(bed.getfasta(genome_fa).seqfn).readlines():
+            if not line.startswith('>'):
+                sequences.append(line.strip().upper())
+
+        # Group by splice event
+        sequences = np.array_split(np.array(sequences), len(event_regions))
+        vprint(f'| Loaded {len(sequences)} samples; {len(sequences[0])} sequences each')
+        self.features = sequences
+        
+        # Define classes as sample
+        labels = [event.sample for event in jc.events]
         self.labels = pd.factorize(labels)[0]
         
+        # Define pytorch-style transforms
         self.transform = []
-        
         if transform:
             self.transform = transform
-
         self.transform = Compose(self.transform + [ToOneHotEncoding()])
-        
     
     def __len__(self):
         return len(self.labels)
     
-    
     def __getitem__(self, idx):
-        sequences = [seq_group[idx] for seq_group in self.features]
+        sequences = self.features[idx]
         label = self.labels[idx]
                 
         sample = {'X': sequences, 'y': label}
@@ -197,14 +230,13 @@ class CropSequence(object):
     
 class ToOneHotEncoding(object):
     '''
-    Convert ndarrays
+    Convert DNA sequence to one-hot encoded n x 4 array
     '''
     def __init__(self):
         self.base2index = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
     
     def __call__(self, sample):
         sequences = sample['X']
-        
         new_seqs = []
         for seq in sequences:
             one_hot = np.zeros((len(seq), 4), dtype=np.float32)
@@ -214,14 +246,8 @@ class ToOneHotEncoding(object):
             new_seqs.append(np.transpose(one_hot))
             
         new_seqs = np.array(new_seqs)
-        new_seqs = np.transpose(new_seqs, (1, 0, 2))
+#         vprint(new_seqs.shape)
+#         new_seqs = np.transpose(new_seqs, (1, 0, 2))
             
         sample['X'] = new_seqs
         return sample
-    
-def _calc_conv_pad(input_size, output_size, kernel_size, stride):
-    '''
-    Calculate appropriate padding to guarantee output size.
-    '''
-    return int((output_size * stride - input_size + kernel_size - stride) / 2)
-
