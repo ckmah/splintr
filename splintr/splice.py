@@ -41,7 +41,6 @@ class SpliceData():
         event_type (str) : SE, RI, A5SS, A3SS, or MXE
             
         '''
-        vprint('Initializing SpliceData object...')
         if type(rmats_data) is str:
             data = pd.read_csv(rmats_data, sep='\t')
         elif type(rmats_data) is pd.DataFrame:
@@ -52,10 +51,7 @@ class SpliceData():
         else:
             raise Exception('Data type not recognized. rmats_data must be a str, DataFrame or list.')
         
-        vprint('| Creating events...')
         self.events = data.swifter.progress_bar(False).apply(SpliceEvent, axis=1).tolist()
-        
-        vprint('| Done.')
         
     def get_junction_regions(self, exon_in, intron_in):
         '''

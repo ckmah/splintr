@@ -14,7 +14,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from torch import nn
-from skorch.callbacks import Callback
+# from skorch.callbacks import Callback
 from pybedtools import BedTool
 from Bio.Seq import Seq
 from collections import OrderedDict, namedtuple
@@ -25,6 +25,8 @@ from torch.utils.tensorboard import SummaryWriter
 from IPython.display import display, clear_output
 
 import scikitplot as skplt
+
+from splintr.util import vprint
 
 def show_sample(sample, class_names):
     '''
@@ -68,7 +70,7 @@ class RunManager():
         self.valid_loader = None
         self.tb = None
         
-    def begin_run(self, run, network, train_loader, valid_loader, log_dir=None):
+    def begin_run(self, run, network, train_loader, valid_loader, label_names=None, log_dir=None):
         
         self.run_start_time = time.time()
         self.run_params = run
@@ -77,21 +79,24 @@ class RunManager():
         self.network = network.cpu()
         self.train_loader = train_loader
         self.valid_loader = valid_loader
+        self.label_names = label_names
+        
         self.tb = SummaryWriter(log_dir=f'{log_dir}/{run}')
         
         sequences, labels = next(iter(self.train_loader))
         
         self.tb.add_graph(self.network, sequences)
         
-    def end_run(self, train_class_names, valid_class_names):
-        train_fig = self._get_confusion_matrix(train_class_names, train=True)
+    def end_run(self):
+        train_fig = self._get_confusion_matrix(train=True)
         self.tb.add_figure(tag='train_confusion', figure=train_fig)
         
-        valid_fig = self._get_confusion_matrix(valid_class_names, train=False)
+        valid_fig = self._get_confusion_matrix(train=False)
         self.tb.add_figure(tag='valid_confusion', figure=valid_fig)
         
         self.tb.close()
         self.epoch_count = 0
+        return self.run_data[-1]['valid_accuracy']
         
     def begin_epoch(self):
         self.epoch_start_time = time.time()
@@ -130,13 +135,13 @@ class RunManager():
         results["valid_accuracy"] = valid_accuracy        
         results['epoch_duration'] = epoch_duration
         results['run_duration'] = run_duration
-        for k,v in self.run_params._asdict().items():
+        for k,v in self.run_params.items():
             results[k] = v
         self.run_data.append(results)
-        df = pd.DataFrame.from_dict(self.run_data, orient='columns')
         
-        clear_output(wait=True)
-        display(df)
+#         df = pd.DataFrame.from_dict(self.run_data, orient='columns')
+#         clear_output(wait=True)
+#         display(df)
     
     def track_train_loss(self, loss):
         self.epoch_train_loss += loss.item() * self.train_loader.batch_size
@@ -155,15 +160,20 @@ class RunManager():
         self.run_valid_labels.extend(labels.cpu())
         
     @torch.no_grad()
-    def _get_confusion_matrix(self, class_names, train=True):
-        class_dict = dict(enumerate(class_names))
-        
+    def _get_confusion_matrix(self, train=True):
         if train:
             labels = self.run_train_labels
             preds = self.run_train_preds
         else:
             labels = self.run_valid_labels
             preds = self.run_valid_preds
+            
+        if self.label_names is not None:
+            label_num = np.unique(self.label_names[0])
+            label_name = np.unique(self.label_names[1])
+            class_dict = dict(zip(label_num, label_name))
+        else:
+            class_dict = list(range(max(labels)))
             
         ax = skplt.metrics.plot_confusion_matrix(y_true=[class_dict[int(l)] for l in labels],
                                                  y_pred=[class_dict[int(y)] for y in preds],
