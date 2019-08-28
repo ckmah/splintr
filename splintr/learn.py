@@ -119,7 +119,7 @@ def fit(params, train_loader, valid_loader, num_epochs=10, label_names=None, log
     # Initialize model
     net = sp.SplintrNet(num_classes=6, params=params).cuda()
     summary(net, (4,4, 384))
-    optimizer = torch.optim.Adam(net.parameters(), lr=params['lr'], weight_decay=0)
+    optimizer = torch.optim.Adam(net.parameters(), lr=params['lr'], weight_decay=params['weight_decay'])
     manager = RunManager()
     
     # Perform training
@@ -198,7 +198,7 @@ class SplintrNet(nn.Module):
         # Max pool layer
         self.conv2.add_module('maxpool', nn.MaxPool2d(kernel_size=(1, 2)))
         
-        self.drop_out = nn.Dropout(0)
+        self.drop_out = nn.Dropout(params['dropout'])
         
         fc_in = int(params['filter2']*4*64)
         self.fc1 = nn.Linear(in_features=fc_in, out_features=params['fc_out'])
